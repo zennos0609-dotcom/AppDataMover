@@ -185,7 +185,36 @@ namespace AppDataMover
                 e.AppName = best.Name;
                 e.AppInstallDir = best.InstallLocation;
             }
+            else
+            {
+                // registry matching failed; fall back to the built-in known-folder table
+                // (covers per-user installs that hide from the uninstall keys, Chinese and
+                // international software alike). Label only: install dir stays unknown,
+                // so the default target falls back to the roomiest drive.
+                string label;
+                if (KnownApps.TryGetValue(fn, out label)) e.AppName = label;
+            }
         }
+
+        /// <summary>Folder name (normalized: lowercase, letters/digits only) -> display label.</summary>
+        static readonly Dictionary<string, string> KnownApps = new Dictionary<string, string>
+        {
+            // Chinese software
+            { "tencent", "腾讯 Tencent" }, { "wechat", "微信 WeChat" }, { "weixin", "微信 WeChat" },
+            { "qq", "腾讯 QQ" }, { "kingsoft", "金山 Kingsoft / WPS" }, { "wps", "WPS Office" },
+            { "baidu", "百度 Baidu" }, { "netease", "网易 NetEase" }, { "bytedance", "字节跳动 ByteDance" },
+            { "alibaba", "阿里巴巴 Alibaba" }, { "alipay", "支付宝 Alipay" }, { "sogou", "搜狗 Sogou" },
+            { "duowan", "YY 语音 duowan" }, { "dingtalk", "钉钉 DingTalk" }, { "feishu", "飞书 Feishu" },
+            // International software
+            { "google", "Google" }, { "mozilla", "Mozilla Firefox" }, { "adobe", "Adobe" },
+            { "autodesk", "Autodesk" }, { "zoom", "Zoom" }, { "nvidia", "NVIDIA" },
+            { "spotify", "Spotify" }, { "discord", "Discord" }, { "slack", "Slack" },
+            { "telegramdesktop", "Telegram" }, { "whatsapp", "WhatsApp" }, { "signal", "Signal" },
+            { "obsstudio", "OBS Studio" }, { "notion", "Notion" }, { "figma", "Figma" },
+            { "epicgameslauncher", "Epic Games" }, { "steam", "Steam" }, { "riotgames", "Riot Games" },
+            { "postman", "Postman" }, { "jetbrains", "JetBrains" }, { "code", "Visual Studio Code" },
+            { "cursor", "Cursor" }, { "dropbox", "Dropbox" }, { "github", "GitHub" },
+        };
     }
 
     /// <summary>Classify a folder: cache / app data / protected / special-handling.</summary>
@@ -199,8 +228,8 @@ namespace AppDataMover
         };
         static readonly string[] CacheNames =
         {
-            "cache", "caches", ".cache", "uv", "pip", "npm-cache", "pnpm-store", "pnpm-cache",
-            "gpucache", "crashdumps", "temp", "d3dscache", "fontconfig", "thumbnails", ".thumbnails"
+            "cache", "caches", ".cache", "cache2", "uv", "pip", "npm-cache", "pnpm-store", "pnpm-cache",
+            "gpucache", "crashdumps", "temp", "d3dscache", "shadercache", "fontconfig", "thumbnails", ".thumbnails"
         };
         static readonly string[] SpecialNames = { "docker", "wsl" };
 
@@ -210,23 +239,23 @@ namespace AppDataMover
             if (SpecialNames.Contains(n))
             {
                 e.Kind = FolderKind.Special;
-                e.KindReason = "contains virtual disks (vhdx); needs export/import instead of a plain move / 内含虚拟磁盘，需要特殊迁移流程";
+                e.KindReason = Loc.T("内含虚拟磁盘，需要特殊迁移流程", "contains virtual disks (vhdx); needs export/import instead of a plain move");
                 return;
             }
             if (ProtectedNames.Contains(n))
             {
                 e.Kind = FolderKind.SystemProtected;
-                e.KindReason = "system or UWP data; moving breaks Windows / 系统或商店应用数据，搬移会破坏系统";
+                e.KindReason = Loc.T("系统或商店应用数据，搬移会破坏系统", "system or UWP data; moving breaks Windows");
                 return;
             }
             if (CacheNames.Contains(n) || n.EndsWith("-cache") || n.EndsWith("cache"))
             {
                 e.Kind = FolderKind.Cache;
-                e.KindReason = "cache directory; safe to relocate or even purge / 缓存目录，可放心迁移";
+                e.KindReason = Loc.T("缓存目录，可放心迁移", "cache directory; safe to relocate or even purge");
                 return;
             }
             e.Kind = FolderKind.AppData;
-            e.KindReason = "application data; movable when the app is closed / 应用数据，关闭对应软件后可迁移";
+            e.KindReason = Loc.T("应用数据，关闭对应软件后可迁移", "application data; movable when the app is closed");
         }
     }
 }

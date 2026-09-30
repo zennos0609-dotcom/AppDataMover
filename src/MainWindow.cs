@@ -12,10 +12,37 @@ using System.Windows.Media;
 
 namespace AppDataMover
 {
-    /// <summary>Minimal bilingual strings. 中文/English toggle.</summary>
+    /// <summary>Minimal bilingual strings. 中文/English toggle, persisted in HKCU.</summary>
     public static class Loc
     {
-        public static bool Zh = CultureInfo.CurrentUICulture.Name.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+        const string RegKey = @"Software\AppDataMover";
+        public static bool Zh;
+
+        static Loc()
+        {
+            Zh = CultureInfo.CurrentUICulture.Name.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RegKey))
+                {
+                    var v = k?.GetValue("lang") as string;
+                    if (v == "zh") Zh = true; else if (v == "en") Zh = false;
+                }
+            }
+            catch { }
+        }
+
+        public static void SetZh(bool zh)
+        {
+            Zh = zh;
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RegKey))
+                    k.SetValue("lang", zh ? "zh" : "en");
+            }
+            catch { }
+        }
+
         public static string T(string zh, string en) => Zh ? zh : en;
     }
 
@@ -110,7 +137,6 @@ namespace AppDataMover
 
         public MainWindow()
         {
-            Title = "AppData Mover 迁移助手";
             Width = 1180; Height = 720;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI");
@@ -154,7 +180,7 @@ namespace AppDataMover
             _btnMove.Click += async (s, e) => await MoveBatchAsync();
             _btnRestore.Click += async (s, e) => await RestoreBatchAsync();
             _btnOneClick.Click += async (s, e) => await OneClickAsync();
-            _btnLang.Click += (s, e) => { Loc.Zh = !Loc.Zh; ApplyLang(); foreach (var r in _rows) r.Refresh(); };
+            _btnLang.Click += (s, e) => { Loc.SetZh(!Loc.Zh); ApplyLang(); foreach (var r in _rows) r.Refresh(); };
             Grid.SetRow(bar, 0);
             root.Children.Add(bar);
 
@@ -243,6 +269,7 @@ namespace AppDataMover
 
         void ApplyLang()
         {
+            Title = Loc.T("AppData Mover 迁移助手", "AppData Mover");
             _btnScan.Content = Loc.T("扫描 AppData", "Scan AppData");
             _btnCheckAll.Content = Loc.T("全选/清空", "Check all/none");
             _btnLocks.Content = Loc.T("检测占用", "Check locks");

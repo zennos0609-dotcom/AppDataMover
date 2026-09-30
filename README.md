@@ -28,7 +28,7 @@ Windows 的**目录联接**可以把文件夹搬走后，在原路径留一个"�
   2. 主程序在 C 盘或未识别 → 搬到剩余空间最大的非系统盘 `X:\AppDataMoved\`
   3. 也可以自己选任意目录
 - **随时搬回**：识别已有联接，一键把数据搬回 C 盘原位
-- **中英双语界面**：右上角一键切换
+- **中英双语界面**：右上角一键切换并记住选择；英文 Windows 自动以英文启动
 
 ## 使用方法
 
@@ -97,7 +97,8 @@ An NTFS **junction** lets you move a folder away while leaving a transparent sig
 - **Safe move pipeline**: copy → verify file count & bytes → stash original → create junction → probe through it → delete stash. **Any failure rolls back automatically**
 - **Default target policy**: next to the app's install dir when it's off C:; otherwise the roomiest non-system drive (`X:\AppDataMoved\`); or pick any folder yourself
 - **Undo**: detects existing junctions and moves data back to C:
-- **Bilingual UI**: 中文/English toggle
+- **Bilingual UI**: 中文/English toggle with persistence; English Windows starts in English automatically
+- **Built-in app catalog**: recognizes 40+ Chinese and international apps (WeChat, WPS, Discord, Steam, Spotify, NVIDIA…) even when registry matching fails
 
 ### Usage
 

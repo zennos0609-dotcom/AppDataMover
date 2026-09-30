@@ -28,12 +28,13 @@ namespace AppDataMover
             try
             {
                 if (!Directory.Exists(src)) return Fail("source not found: " + src);
-                if (Junction.GetTarget(src) != null) return Fail("source is already a junction / 源已经是联接");
+                if (Junction.GetTarget(src) != null) return Fail(Loc.T("源已经是联接", "source is already a junction"));
                 if (Directory.Exists(dst)) return Fail("destination already exists: " + dst);
 
                 log.Report(">> robocopy copy start: " + src + " -> " + dst);
                 var rc = await RunRobocopy(src, dst, false, log, ct);
-                if (rc >= 8) return Fail("copy failed, robocopy exit code " + rc + "（已自动清理半成品，原目录未动）");
+                if (rc >= 8) return Fail(Loc.T("复制失败，robocopy 退出码 " + rc + "（已自动清理半成品，原目录未动）",
+                    "copy failed, robocopy exit code " + rc + " (partial files cleaned, source untouched)"));
 
                 // verify: file count + total size match
                 long srcBytes, srcFiles, dstBytes, dstFiles;
@@ -53,14 +54,15 @@ namespace AppDataMover
                 catch (Exception ex)
                 {
                     TryDelete(dst);
-                    return Fail("cannot rename source (locked?): " + ex.Message + "（已回滚，原目录未动）");
+                    return Fail(Loc.T("无法改名源目录（被占用？）：", "cannot rename source (locked?): ") + ex.Message
+                        + Loc.T("（已回滚，原目录未动）", " (rolled back, source untouched)"));
                 }
 
                 var err = Junction.Create(src, dst);
                 if (err != null)
                 {
                     Directory.Move(bak, src); TryDelete(dst);
-                    return Fail("junction creation failed: " + err + "（已回滚）");
+                    return Fail(Loc.T("创建联接失败：", "junction creation failed: ") + err + Loc.T("（已回滚）", " (rolled back)"));
                 }
 
                 // probe through the junction
@@ -72,7 +74,7 @@ namespace AppDataMover
                     Junction.Remove(src);
                     Directory.Move(bak, src);
                     TryDelete(dst);
-                    return Fail("junction probe failed（已回滚）");
+                    return Fail(Loc.T("联接验证失败（已回滚）", "junction probe failed (rolled back)"));
                 }
 
                 // delete backup (retry a few times: AV/indexer may hold handles briefly)
@@ -82,7 +84,8 @@ namespace AppDataMover
                     await Task.Delay(1000);
                     deleted = TryDelete(bak);
                 }
-                if (!deleted) log.Report("!! backup dir could not be deleted yet, left at: " + bak + "（可稍后手动删除）");
+                if (!deleted) log.Report(Loc.T("!! 暂存目录暂时删不掉，保留在：" + bak + "（可稍后手动删除）",
+                    "!! backup dir could not be deleted yet, left at: " + bak + " (delete it manually later)"));
 
                 rep.Success = true;
                 rep.BytesMoved = srcBytes;
@@ -91,7 +94,8 @@ namespace AppDataMover
             }
             catch (OperationCanceledException)
             {
-                return Fail("cancelled by user（若已开始复制，半成品已尽量清理）");
+                return Fail(Loc.T("已取消（若已开始复制，半成品已尽量清理）",
+                    "cancelled by user (partial files cleaned where possible)"));
             }
             catch (Exception ex)
             {
@@ -106,7 +110,8 @@ namespace AppDataMover
             var target = Junction.GetTarget(linkPath);
             if (target == null) return Fail(linkPath + " is not a junction");
             log.Report(">> removing junction: " + linkPath);
-            if (!Junction.Remove(linkPath)) return Fail("cannot remove junction (in use? close the app first)");
+            if (!Junction.Remove(linkPath)) return Fail(Loc.T("无法移除联接（被占用？请先关闭对应软件）",
+                "cannot remove junction (in use? close the app first)"));
             try
             {
                 var rc = await RunRobocopy(target, linkPath, false, log, ct);
@@ -114,11 +119,12 @@ namespace AppDataMover
                 {
                     // try to put the junction back so nothing is lost
                     Junction.Create(linkPath, target);
-                    return Fail("restore copy failed, junction re-created, state unchanged");
+                    return Fail(Loc.T("搬回复制失败，联接已重建，状态未变",
+                        "restore copy failed, junction re-created, state unchanged"));
                 }
                 long a, b, c, d;
                 CountTree(target, out a, out b); CountTree(linkPath, out c, out d);
-                if (a != c || b != d) return Fail("restore verify mismatch; data kept at " + target);
+                if (a != c || b != d) return Fail(Loc.T("搬回校验不一致；数据保留在 ", "restore verify mismatch; data kept at ") + target);
                 TryDelete(target);
                 rep.Success = true;
                 rep.BytesMoved = c;
@@ -128,7 +134,7 @@ namespace AppDataMover
             catch (Exception ex)
             {
                 if (!Directory.Exists(linkPath)) Junction.Create(linkPath, target);
-                return Fail("restore error: " + ex.Message);
+                return Fail(Loc.T("搬回出错：", "restore error: ") + ex.Message);
             }
         }
 
