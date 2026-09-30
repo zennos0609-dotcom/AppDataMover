@@ -32,6 +32,7 @@ namespace AppDataMover
         public string Name => E.Name;
         public string Scope => E.Scope;
         public string Size => E.SizeText;
+        public long SortBytes => E.SizeBytes; // numeric key so the Size column sorts correctly
         public string App => E.AppName ?? Loc.T("（未识别）", "(unknown)");
         public string Kind
         {
@@ -178,7 +179,14 @@ namespace AppDataMover
 
             AddCol(Loc.T("文件夹", "Folder"), "Name", 140);
             AddCol("Scope", "Scope", 70);
-            AddCol(Loc.T("大小", "Size"), "Size", 90);
+            var sizeCol = new DataGridTextColumn
+            {
+                Header = Loc.T("大小", "Size"),
+                Width = 90,
+                Binding = new Binding("Size"),          // display text
+                SortMemberPath = "SortBytes"            // but sort numerically
+            };
+            _grid.Columns.Add(sizeCol);
             AddCol(Loc.T("对应软件", "App"), "App", 210);
             AddCol(Loc.T("类型", "Kind"), "Kind", 90, "KindColor");
             AddCol(Loc.T("状态", "State"), "State", 190);
