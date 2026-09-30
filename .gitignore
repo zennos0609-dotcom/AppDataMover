@@ -1,0 +1,4 @@
+# build output —— 发布请到 GitHub Releases
+/AppDataMover.exe
+*.pdb
+*.appdata-mover-bak/
