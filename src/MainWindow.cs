@@ -98,14 +98,19 @@ namespace AppDataMover
         readonly Button _btnBrowse = new Button();
         readonly Button _btnLang = new Button();
         readonly Button _btnCheckAll = new Button();
+        readonly Button _btnOneClick = new Button();
+        readonly ComboBox _cmbThreshold = new ComboBox();
         readonly TextBox _target = new TextBox();
         bool _busy;
         string _profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
+        static readonly long[] Thresholds = { 500L << 20, 1L << 30, 2L << 30, 5L << 30 };
+        static readonly string[] ThresholdLabels = { "500 MB", "1 GB", "2 GB", "5 GB" };
+
         public MainWindow()
         {
             Title = "AppData Mover 迁移助手";
-            Width = 1150; Height = 720;
+            Width = 1180; Height = 720;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI");
             BuildUi();
@@ -115,25 +120,39 @@ namespace AppDataMover
         void BuildUi()
         {
             var root = new Grid();
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // toolbar
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // grid
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // action bar
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(140) }); // log
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // status
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(140) });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
             // toolbar
             var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8) };
-            foreach (var b in new[] { _btnScan, _btnCheckAll, _btnLocks, _btnCloseLocks, _btnMove, _btnRestore, _btnLang })
+            foreach (var b in new[] { _btnScan, _btnCheckAll, _btnLocks, _btnCloseLocks, _btnMove, _btnRestore })
             {
                 b.Margin = new Thickness(4, 0, 4, 0); b.Padding = new Thickness(12, 5, 12, 5);
                 bar.Children.Add(b);
             }
+            // one-click group: [一键迁移 ≥] [ComboBox]
+            _cmbThreshold.ItemsSource = ThresholdLabels;
+            _cmbThreshold.SelectedIndex = 1; // 1 GB default
+            _cmbThreshold.Width = 82;
+            _cmbThreshold.Margin = new Thickness(0, 0, 4, 0);
+            _cmbThreshold.VerticalContentAlignment = VerticalAlignment.Center;
+            _btnOneClick.Margin = new Thickness(12, 0, 2, 0); _btnOneClick.Padding = new Thickness(12, 5, 12, 5);
+            _btnOneClick.FontWeight = FontWeights.SemiBold;
+            bar.Children.Add(_btnOneClick);
+            bar.Children.Add(_cmbThreshold);
+            _btnLang.Margin = new Thickness(12, 0, 4, 0); _btnLang.Padding = new Thickness(12, 5, 12, 5);
+            bar.Children.Add(_btnLang);
+
             _btnScan.Click += async (s, e) => await ScanAsync();
             _btnCheckAll.Click += (s, e) => ToggleCheckAll();
             _btnLocks.Click += (s, e) => CheckLocks();
             _btnCloseLocks.Click += (s, e) => CloseLockers();
             _btnMove.Click += async (s, e) => await MoveBatchAsync();
             _btnRestore.Click += async (s, e) => await RestoreBatchAsync();
+            _btnOneClick.Click += async (s, e) => await OneClickAsync();
             _btnLang.Click += (s, e) => { Loc.Zh = !Loc.Zh; ApplyLang(); foreach (var r in _rows) r.Refresh(); };
             Grid.SetRow(bar, 0);
             root.Children.Add(bar);
@@ -141,29 +160,29 @@ namespace AppDataMover
             // grid
             _grid.Margin = new Thickness(8, 0, 8, 4);
             _grid.AutoGenerateColumns = false;
-            _grid.IsReadOnly = false;
-            _grid.SelectionMode = DataGridSelectionMode.Extended;   // Ctrl/Shift multi-select
+            _grid.IsReadOnly = true; // template checkbox stays clickable; text cells never enter edit mode
+            _grid.SelectionMode = DataGridSelectionMode.Extended;
             _grid.HeadersVisibility = DataGridHeadersVisibility.Column;
             _grid.GridLinesVisibility = DataGridGridLinesVisibility.Horizontal;
             _grid.SelectionChanged += (s, e) => OnSelect();
 
-            // checkbox column for batch operations
-            var chkCol = new DataGridCheckBoxColumn
-            {
-                Header = "✓",
-                Width = 32,
-                Binding = new Binding("IsChecked") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }
-            };
+            // single-click checkbox column (template = no edit-mode dance)
+            var chkCol = new DataGridTemplateColumn { Header = "✓", Width = 34 };
+            var factory = new FrameworkElementFactory(typeof(CheckBox));
+            factory.SetBinding(CheckBox.IsCheckedProperty,
+                new Binding("IsChecked") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
+            factory.SetValue(CheckBox.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            factory.SetValue(CheckBox.VerticalAlignmentProperty, VerticalAlignment.Center);
+            chkCol.CellTemplate = new DataTemplate { VisualTree = factory };
             _grid.Columns.Add(chkCol);
+
             AddCol(Loc.T("文件夹", "Folder"), "Name", 140);
             AddCol("Scope", "Scope", 70);
             AddCol(Loc.T("大小", "Size"), "Size", 90);
             AddCol(Loc.T("对应软件", "App"), "App", 210);
             AddCol(Loc.T("类型", "Kind"), "Kind", 90, "KindColor");
             AddCol(Loc.T("状态", "State"), "State", 190);
-            AddCol(Loc.T("默认目标", "Default target"), "Target", 320);
-            // only the checkbox cell is editable
-            foreach (var c in _grid.Columns) if (!(c is DataGridCheckBoxColumn)) c.IsReadOnly = true;
+            AddCol(Loc.T("默认目标", "Default target"), "Target", 300);
             _grid.ItemsSource = _rows;
             Grid.SetRow(_grid, 1);
             root.Children.Add(_grid);
@@ -220,8 +239,9 @@ namespace AppDataMover
             _btnCheckAll.Content = Loc.T("全选/清空", "Check all/none");
             _btnLocks.Content = Loc.T("检测占用", "Check locks");
             _btnCloseLocks.Content = Loc.T("关闭占用进程", "Close lockers");
-            _btnMove.Content = Loc.T("迁移勾选/选中项", "Move checked");
+            _btnMove.Content = Loc.T("迁移勾选项", "Move checked");
             _btnRestore.Content = Loc.T("搬回原位", "Move back");
+            _btnOneClick.Content = Loc.T("一键迁移 ≥", "One-click move ≥");
             _btnLang.Content = Loc.Zh ? "EN" : "中文";
             _btnBrowse.Content = Loc.T("自定义目标…", "Browse target…");
             _grid.Columns[1].Header = Loc.T("文件夹", "Folder");
@@ -235,7 +255,7 @@ namespace AppDataMover
         void SetBusy(bool busy)
         {
             _busy = busy;
-            _btnScan.IsEnabled = _btnMove.IsEnabled = _btnRestore.IsEnabled = !busy;
+            _btnScan.IsEnabled = _btnMove.IsEnabled = _btnRestore.IsEnabled = _btnOneClick.IsEnabled = !busy;
         }
 
         Row Selected => _grid.SelectedItem as Row;
@@ -243,7 +263,7 @@ namespace AppDataMover
         List<Row> CheckedRows()
         {
             var list = _rows.Where(r => r.IsChecked).ToList();
-            if (list.Count == 0 && Selected != null) list.Add(Selected); // fallback: current selection
+            if (list.Count == 0 && Selected != null) list.Add(Selected);
             return list;
         }
 
@@ -340,6 +360,42 @@ namespace AppDataMover
                 _target.Text = System.IO.Path.Combine(dlg.SelectedPath, r != null ? (r.E.Scope + "-" + r.E.Name) : "moved");
                 if (r != null) { r.E.SuggestedTarget = _target.Text; r.Refresh(); }
             }
+        }
+
+        /// <summary>One-click: move every movable folder >= threshold. Confirm first, skip locked/protected per item.</summary>
+        async Task OneClickAsync()
+        {
+            if (_busy) return;
+            if (_rows.Count == 0) { Log(Loc.T("请先扫描。", "Scan first.")); return; }
+            if (_rows.Any(r => r.E.SizeBytes < 0)) { Log(Loc.T("大小还没测完，等状态栏提示扫描完成再点。", "Sizes still measuring; wait for scan to finish.")); return; }
+            long threshold = Thresholds[_cmbThreshold.SelectedIndex];
+            var candidates = _rows.Where(r =>
+                r.E.SizeBytes >= threshold &&
+                r.E.State == MoveState.Normal &&
+                (r.E.Kind == FolderKind.Cache || r.E.Kind == FolderKind.AppData)).ToList();
+            if (candidates.Count == 0) { Log(Loc.T("没有符合条件的目录。", "No folders above threshold.")); return; }
+            long total = candidates.Sum(r => r.E.SizeBytes);
+            var preview = string.Join("\n", candidates.Take(12).Select(r => "  " + r.E.Name + "  " + r.Size));
+            if (candidates.Count > 12) preview += "\n  …";
+            var msg = Loc.T("将迁移以下 ", "Will move ") + candidates.Count + Loc.T(" 个目录（共 ", " folders (") + FolderEntry.Humanize(total) + "）：\n\n"
+                + preview
+                + Loc.T("\n\n被占用或失败的项会自动跳过并在日志说明。确定开始？", "\n\nLocked items are skipped automatically. Continue?");
+            if (MessageBox.Show(msg, Loc.T("一键迁移", "One-click move"), MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+
+            SetBusy(true);
+            _bar.IsIndeterminate = true;
+            int ok = 0, fail = 0, skip = 0; long moved = 0;
+            foreach (var r in candidates)
+            {
+                var result = await MoveOneAsync(r, null);
+                if (result == 1) { ok++; moved += r.E.SizeBytes; }
+                else if (result == -1) fail++;
+                else skip++;
+            }
+            _bar.IsIndeterminate = false;
+            SetBusy(false);
+            Status(Loc.T("一键迁移完成：成功 ", "One-click done: ok=") + ok + "（" + FolderEntry.Humanize(moved) + "）"
+                + Loc.T("，失败 ", ", failed=") + fail + Loc.T("，跳过 ", ", skipped=") + skip);
         }
 
         async Task MoveBatchAsync()
