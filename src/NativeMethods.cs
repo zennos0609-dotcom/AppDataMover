@@ -123,6 +123,27 @@ namespace AppDataMover
             [MarshalAs(UnmanagedType.Bool)] public bool bRestartable;
         }
 
+        /// <summary>Restart Manager only accepts file paths; expand a directory to its files (capped).</summary>
+        static string[] ExpandToFiles(string path)
+        {
+            if (File.Exists(path)) return new[] { path };
+            if (!Directory.Exists(path)) return new[] { path };
+            var files = new List<string>();
+            var stack = new Stack<string>();
+            stack.Push(path);
+            const int CAP = 5000;
+            while (stack.Count > 0 && files.Count < CAP)
+            {
+                var dir = stack.Pop();
+                string[] fs = null, ds = null;
+                try { fs = Directory.GetFiles(dir); } catch { }
+                try { ds = Directory.GetDirectories(dir); } catch { }
+                if (fs != null) foreach (var f in fs) { files.Add(f); if (files.Count >= CAP) break; }
+                if (ds != null) foreach (var s in ds) if (Junction.GetTarget(s) == null) stack.Push(s);
+            }
+            return files.ToArray();
+        }
+
         public static List<LockingProcess> WhoLocks(string path)
         {
             var result = new List<LockingProcess>();
@@ -131,8 +152,8 @@ namespace AppDataMover
             if (RmStartSession(out session, 0, key) != 0) return result;
             try
             {
-                string[] res = { path };
-                if (RmRegisterResources(session, 1, res, 0, IntPtr.Zero, 0, null) != 0) return result;
+                string[] res = ExpandToFiles(path);
+                if (RmRegisterResources(session, (uint)res.Length, res, 0, IntPtr.Zero, 0, null) != 0) return result;
                 uint needed = 0, count = 0, reboot = 0;
                 int rc = RmGetList(session, out needed, ref count, null, ref reboot);
                 if (needed == 0) return result;
@@ -159,8 +180,8 @@ namespace AppDataMover
             if (RmStartSession(out session, 0, key) != 0) return false;
             try
             {
-                string[] res = { path };
-                if (RmRegisterResources(session, 1, res, 0, IntPtr.Zero, 0, null) != 0) return false;
+                string[] res = ExpandToFiles(path);
+                if (RmRegisterResources(session, (uint)res.Length, res, 0, IntPtr.Zero, 0, null) != 0) return false;
                 return RmShutdown(session, force ? 0x1 : 0x0, IntPtr.Zero) == 0;
             }
             finally { RmEndSession(session); }

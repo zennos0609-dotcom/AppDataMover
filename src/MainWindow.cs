@@ -22,7 +22,13 @@ namespace AppDataMover
     public class Row : INotifyPropertyChanged
     {
         public FolderEntry E;
+        bool _checked;
         public Row(FolderEntry e) { E = e; }
+        public bool IsChecked
+        {
+            get { return _checked; }
+            set { _checked = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs("IsChecked")); }
+        }
         public string Name => E.Name;
         public string Scope => E.Scope;
         public string Size => E.SizeText;
@@ -91,8 +97,9 @@ namespace AppDataMover
         readonly Button _btnCloseLocks = new Button();
         readonly Button _btnBrowse = new Button();
         readonly Button _btnLang = new Button();
+        readonly Button _btnCheckAll = new Button();
         readonly TextBox _target = new TextBox();
-        CancellationTokenSource _cts;
+        bool _busy;
         string _profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         public MainWindow()
@@ -116,16 +123,17 @@ namespace AppDataMover
 
             // toolbar
             var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8) };
-            foreach (var b in new[] { _btnScan, _btnLocks, _btnCloseLocks, _btnMove, _btnRestore, _btnLang })
+            foreach (var b in new[] { _btnScan, _btnCheckAll, _btnLocks, _btnCloseLocks, _btnMove, _btnRestore, _btnLang })
             {
                 b.Margin = new Thickness(4, 0, 4, 0); b.Padding = new Thickness(12, 5, 12, 5);
                 bar.Children.Add(b);
             }
             _btnScan.Click += async (s, e) => await ScanAsync();
+            _btnCheckAll.Click += (s, e) => ToggleCheckAll();
             _btnLocks.Click += (s, e) => CheckLocks();
             _btnCloseLocks.Click += (s, e) => CloseLockers();
-            _btnMove.Click += async (s, e) => await MoveSelectedAsync();
-            _btnRestore.Click += async (s, e) => await RestoreSelectedAsync();
+            _btnMove.Click += async (s, e) => await MoveBatchAsync();
+            _btnRestore.Click += async (s, e) => await RestoreBatchAsync();
             _btnLang.Click += (s, e) => { Loc.Zh = !Loc.Zh; ApplyLang(); foreach (var r in _rows) r.Refresh(); };
             Grid.SetRow(bar, 0);
             root.Children.Add(bar);
@@ -133,18 +141,29 @@ namespace AppDataMover
             // grid
             _grid.Margin = new Thickness(8, 0, 8, 4);
             _grid.AutoGenerateColumns = false;
-            _grid.IsReadOnly = true;
-            _grid.SelectionMode = DataGridSelectionMode.Single;
+            _grid.IsReadOnly = false;
+            _grid.SelectionMode = DataGridSelectionMode.Extended;   // Ctrl/Shift multi-select
             _grid.HeadersVisibility = DataGridHeadersVisibility.Column;
             _grid.GridLinesVisibility = DataGridGridLinesVisibility.Horizontal;
             _grid.SelectionChanged += (s, e) => OnSelect();
+
+            // checkbox column for batch operations
+            var chkCol = new DataGridCheckBoxColumn
+            {
+                Header = "✓",
+                Width = 32,
+                Binding = new Binding("IsChecked") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }
+            };
+            _grid.Columns.Add(chkCol);
             AddCol(Loc.T("文件夹", "Folder"), "Name", 140);
             AddCol("Scope", "Scope", 70);
             AddCol(Loc.T("大小", "Size"), "Size", 90);
-            AddCol(Loc.T("对应软件", "App"), "App", 220);
+            AddCol(Loc.T("对应软件", "App"), "App", 210);
             AddCol(Loc.T("类型", "Kind"), "Kind", 90, "KindColor");
-            AddCol(Loc.T("状态", "State"), "State", 200);
+            AddCol(Loc.T("状态", "State"), "State", 190);
             AddCol(Loc.T("默认目标", "Default target"), "Target", 320);
+            // only the checkbox cell is editable
+            foreach (var c in _grid.Columns) if (!(c is DataGridCheckBoxColumn)) c.IsReadOnly = true;
             _grid.ItemsSource = _rows;
             Grid.SetRow(_grid, 1);
             root.Children.Add(_grid);
@@ -198,21 +217,41 @@ namespace AppDataMover
         void ApplyLang()
         {
             _btnScan.Content = Loc.T("扫描 AppData", "Scan AppData");
+            _btnCheckAll.Content = Loc.T("全选/清空", "Check all/none");
             _btnLocks.Content = Loc.T("检测占用", "Check locks");
             _btnCloseLocks.Content = Loc.T("关闭占用进程", "Close lockers");
-            _btnMove.Content = Loc.T("迁移选中项", "Move selected");
+            _btnMove.Content = Loc.T("迁移勾选/选中项", "Move checked");
             _btnRestore.Content = Loc.T("搬回原位", "Move back");
             _btnLang.Content = Loc.Zh ? "EN" : "中文";
             _btnBrowse.Content = Loc.T("自定义目标…", "Browse target…");
-            _grid.Columns[0].Header = Loc.T("文件夹", "Folder");
-            _grid.Columns[2].Header = Loc.T("大小", "Size");
-            _grid.Columns[3].Header = Loc.T("对应软件", "App");
-            _grid.Columns[4].Header = Loc.T("类型", "Kind");
-            _grid.Columns[5].Header = Loc.T("状态", "State");
-            _grid.Columns[6].Header = Loc.T("默认目标", "Default target");
+            _grid.Columns[1].Header = Loc.T("文件夹", "Folder");
+            _grid.Columns[3].Header = Loc.T("大小", "Size");
+            _grid.Columns[4].Header = Loc.T("对应软件", "App");
+            _grid.Columns[5].Header = Loc.T("类型", "Kind");
+            _grid.Columns[6].Header = Loc.T("状态", "State");
+            _grid.Columns[7].Header = Loc.T("默认目标", "Default target");
+        }
+
+        void SetBusy(bool busy)
+        {
+            _busy = busy;
+            _btnScan.IsEnabled = _btnMove.IsEnabled = _btnRestore.IsEnabled = !busy;
         }
 
         Row Selected => _grid.SelectedItem as Row;
+
+        List<Row> CheckedRows()
+        {
+            var list = _rows.Where(r => r.IsChecked).ToList();
+            if (list.Count == 0 && Selected != null) list.Add(Selected); // fallback: current selection
+            return list;
+        }
+
+        void ToggleCheckAll()
+        {
+            var anyUnchecked = _rows.Any(r => !r.IsChecked);
+            foreach (var r in _rows) r.IsChecked = anyUnchecked;
+        }
 
         void Log(string s)
         {
@@ -222,7 +261,7 @@ namespace AppDataMover
 
         async Task ScanAsync()
         {
-            _btnScan.IsEnabled = false;
+            SetBusy(true);
             _rows.Clear();
             _grid.Items.Refresh();
             Status(Loc.T("正在枚举目录…", "Enumerating folders…"));
@@ -244,12 +283,11 @@ namespace AppDataMover
                 Status(Loc.T("已测量 ", "Measured ") + e.Name + "  (" + e.SizeText + ")");
             });
             await Scanner.MeasureAsync(entries, sync.Report);
-            // re-sort by size desc within the view
             var sorted = _rows.OrderByDescending(r => r.E.SizeBytes).ToList();
             _rows.Clear(); foreach (var r in sorted) _rows.Add(r);
             _grid.Items.Refresh();
-            Status(Loc.T("扫描完成，共 ", "Scan done: ") + _rows.Count + Loc.T(" 个目录。绿色=缓存可放心搬，红色=系统保护勿动。", " folders. Green=cache, safe; red=protected, do not move."));
-            _btnScan.IsEnabled = true;
+            Status(Loc.T("扫描完成，共 ", "Scan done: ") + _rows.Count + Loc.T(" 个目录。绿色=缓存可放心搬，红色=系统保护勿动。勾选后可批量迁移。", " folders. Green=cache, safe; red=protected. Tick checkboxes to batch-move."));
+            SetBusy(false);
         }
 
         void OnSelect()
@@ -304,48 +342,78 @@ namespace AppDataMover
             }
         }
 
-        async Task MoveSelectedAsync()
+        async Task MoveBatchAsync()
         {
-            var r = Selected; if (r == null) { Log(Loc.T("请先选中一行", "Select a row first")); return; }
-            if (r.E.Kind == FolderKind.SystemProtected) { Log(Loc.T("系统保护目录，禁止迁移。", "Protected folder; move blocked.")); return; }
-            if (r.E.Kind == FolderKind.Special) { Log(Loc.T("该目录含虚拟磁盘，请用官方导出/导入流程（见 README）。", "Contains vhdx; use export/import flow (see README).")); return; }
-            if (r.E.State == MoveState.AlreadyMoved) { Log(Loc.T("该项已是联接，如需还原请用“搬回原位”。", "Already a junction; use Move back.")); return; }
-            var dst = _target.Text.Trim();
-            if (string.IsNullOrEmpty(dst)) { Log(Loc.T("目标路径为空。", "Target path empty.")); return; }
+            if (_busy) return;
+            var targets = CheckedRows();
+            if (targets.Count == 0) { Log(Loc.T("请先勾选或选中至少一行", "Check or select at least one row")); return; }
+            SetBusy(true);
+            _bar.IsIndeterminate = true;
+            int ok = 0, fail = 0, skip = 0;
+            foreach (var r in targets)
+            {
+                var result = await MoveOneAsync(r, null);
+                if (result == 1) ok++; else if (result == -1) fail++; else skip++;
+            }
+            _bar.IsIndeterminate = false;
+            SetBusy(false);
+            Status(Loc.T("批量完成：成功 ", "Batch done: ok=") + ok + Loc.T("，失败 ", ", failed=") + fail + Loc.T("，跳过 ", ", skipped=") + skip);
+        }
+
+        /// <summary>returns 1 ok, -1 fail, 0 skipped</summary>
+        async Task<int> MoveOneAsync(Row r, string forcedTarget)
+        {
+            var log = new SynchronizationContextProgress<string>(Log);
+            if (r.E.Kind == FolderKind.SystemProtected) { Log("SKIP " + r.E.Name + Loc.T("：系统保护目录，禁止迁移。", ": protected.")); return 0; }
+            if (r.E.Kind == FolderKind.Special) { Log("SKIP " + r.E.Name + Loc.T("：含虚拟磁盘，请用官方导出/导入流程（见 README）。", ": vhdx inside, use export/import.")); return 0; }
+            if (r.E.State == MoveState.AlreadyMoved) { Log("SKIP " + r.E.Name + Loc.T("：已是联接，如需还原请用“搬回原位”。", ": already moved.")); return 0; }
+            var dst = (forcedTarget ?? (r == Selected ? _target.Text.Trim() : null) ?? r.E.SuggestedTarget ?? "").Trim();
+            if (string.IsNullOrEmpty(dst)) { Log("SKIP " + r.E.Name + Loc.T("：目标路径为空。", ": empty target.")); return 0; }
 
             var lockers = await Task.Run(() => LockChecker.WhoLocks(r.E.FullPath));
             if (lockers.Count > 0)
             {
-                Log(Loc.T("有进程占用，已取消：", "Locked by:"));
+                Log("SKIP " + r.E.Name + Loc.T("：被以下进程占用：", ": locked by:"));
                 foreach (var l in lockers) Log("   " + l);
-                Log(Loc.T("请先点“关闭占用进程”或手动退出软件。", "Close lockers first."));
-                return;
+                return 0;
             }
 
             r.E.State = MoveState.Moving; r.Refresh();
-            _cts = new CancellationTokenSource();
-            _bar.IsIndeterminate = true;
-            var log = new SynchronizationContextProgress<string>(Log);
-            var rep = await Mover.MoveAsync(r.E.FullPath, dst, log, _cts.Token);
-            _bar.IsIndeterminate = false;
-            r.E.State = rep.Success ? MoveState.Moved : MoveState.Failed;
-            if (rep.Success) { r.E.JunctionTarget = dst; r.E.State = MoveState.AlreadyMoved; }
-            Log(rep.Message + (rep.Success ? "  (" + FolderEntry.Humanize(rep.BytesMoved) + ")" : ""));
-            r.Refresh();
-            Status(rep.Success ? Loc.T("迁移成功", "Move succeeded") : Loc.T("迁移失败，已回滚", "Move failed, rolled back"));
-        }
-
-        async Task RestoreSelectedAsync()
-        {
-            var r = Selected; if (r == null) return;
-            if (r.E.State != MoveState.AlreadyMoved) { Log(Loc.T("该项不是联接，无需搬回。", "Not a junction; nothing to restore.")); return; }
-            _bar.IsIndeterminate = true;
-            var log = new SynchronizationContextProgress<string>(Log);
-            var rep = await Mover.RestoreAsync(r.E.FullPath, log, new CancellationTokenSource().Token);
-            _bar.IsIndeterminate = false;
-            if (rep.Success) { r.E.State = MoveState.Normal; r.E.JunctionTarget = null; }
+            Log(Loc.T("开始迁移 ", "Moving ") + r.E.Name + " → " + dst);
+            var rep = await Mover.MoveAsync(r.E.FullPath, dst, log, CancellationToken.None);
+            if (rep.Success)
+            {
+                r.E.State = MoveState.AlreadyMoved;
+                r.E.JunctionTarget = dst;
+                Log(rep.Message + "  (" + FolderEntry.Humanize(rep.BytesMoved) + ")");
+                r.Refresh();
+                return 1;
+            }
+            r.E.State = MoveState.Failed;
             Log(rep.Message);
             r.Refresh();
+            return -1;
+        }
+
+        async Task RestoreBatchAsync()
+        {
+            if (_busy) return;
+            var targets = CheckedRows().Where(r => r.E.State == MoveState.AlreadyMoved).ToList();
+            if (targets.Count == 0) { Log(Loc.T("勾选项里没有已迁移的联接。", "No moved junctions among checked rows.")); return; }
+            SetBusy(true);
+            _bar.IsIndeterminate = true;
+            var log = new SynchronizationContextProgress<string>(Log);
+            foreach (var r in targets)
+            {
+                Log(Loc.T("搬回 ", "Restoring ") + r.E.Name);
+                var rep = await Mover.RestoreAsync(r.E.FullPath, log, CancellationToken.None);
+                if (rep.Success) { r.E.State = MoveState.Normal; r.E.JunctionTarget = null; }
+                else r.E.State = MoveState.Failed;
+                Log(rep.Message);
+                r.Refresh();
+            }
+            _bar.IsIndeterminate = false;
+            SetBusy(false);
         }
 
         void Status(string s) { _status.Text = s; }
