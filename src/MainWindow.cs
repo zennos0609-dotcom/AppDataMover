@@ -72,7 +72,8 @@ namespace AppDataMover
         public event PropertyChangedEventHandler PropertyChanged;
         public void Refresh()
         {
-            PropertyChanged?.Invoke(this, null); // refresh all columns
+            // empty string = "all properties changed"; null would crash the weak-event manager
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
         }
     }
 
