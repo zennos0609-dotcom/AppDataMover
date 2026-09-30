@@ -281,33 +281,44 @@ namespace AppDataMover
 
         async Task ScanAsync()
         {
-            SetBusy(true);
-            _rows.Clear();
-            _grid.Items.Refresh();
-            Status(Loc.T("正在枚举目录…", "Enumerating folders…"));
-            var apps = await Task.Run(() => Attributor.LoadInstalledApps());
-            var entries = await Task.Run(() => Scanner.Scan(_profile));
-            foreach (var e in entries.OrderByDescending(x => x.Scope).ThenBy(x => x.Name))
+            _btnScan.IsEnabled = false;   // 只防重复扫描；测量期间不妨碍迁移按钮
+            try
             {
-                Rules.Classify(e);
-                Attributor.Attribute(e, apps);
-                e.SuggestedTarget = TargetResolver.Suggest(e);
-                _rows.Add(new Row(e));
+                _rows.Clear();
+                _grid.Items.Refresh();
+                Status(Loc.T("正在枚举目录…", "Enumerating folders…"));
+                var apps = await Task.Run(() => Attributor.LoadInstalledApps());
+                var entries = await Task.Run(() => Scanner.Scan(_profile));
+                foreach (var e in entries.OrderByDescending(x => x.Scope).ThenBy(x => x.Name))
+                {
+                    Rules.Classify(e);
+                    Attributor.Attribute(e, apps);
+                    e.SuggestedTarget = TargetResolver.Suggest(e);
+                    _rows.Add(new Row(e));
+                }
+                _grid.Items.Refresh();
+                Status(Loc.T("正在计算大小（后台，多线程）…", "Measuring sizes in background…"));
+                var sync = new SynchronizationContextProgress<FolderEntry>(e =>
+                {
+                    var row = _rows.FirstOrDefault(r => r.E == e);
+                    row?.Refresh();
+                    Status(Loc.T("已测量 ", "Measured ") + e.Name + "  (" + e.SizeText + ")");
+                });
+                await Scanner.MeasureAsync(entries, sync.Report);
+                var sorted = _rows.OrderByDescending(r => r.E.SizeBytes).ToList();
+                _rows.Clear(); foreach (var r in sorted) _rows.Add(r);
+                _grid.Items.Refresh();
+                Status(Loc.T("扫描完成，共 ", "Scan done: ") + _rows.Count + Loc.T(" 个目录。绿色=缓存可放心搬，红色=系统保护勿动。勾选后可批量迁移。", " folders. Green=cache, safe; red=protected. Tick checkboxes to batch-move."));
             }
-            _grid.Items.Refresh();
-            Status(Loc.T("正在计算大小（后台，多线程）…", "Measuring sizes in background…"));
-            var sync = new SynchronizationContextProgress<FolderEntry>(e =>
+            catch (Exception ex)
             {
-                var row = _rows.FirstOrDefault(r => r.E == e);
-                row?.Refresh();
-                Status(Loc.T("已测量 ", "Measured ") + e.Name + "  (" + e.SizeText + ")");
-            });
-            await Scanner.MeasureAsync(entries, sync.Report);
-            var sorted = _rows.OrderByDescending(r => r.E.SizeBytes).ToList();
-            _rows.Clear(); foreach (var r in sorted) _rows.Add(r);
-            _grid.Items.Refresh();
-            Status(Loc.T("扫描完成，共 ", "Scan done: ") + _rows.Count + Loc.T(" 个目录。绿色=缓存可放心搬，红色=系统保护勿动。勾选后可批量迁移。", " folders. Green=cache, safe; red=protected. Tick checkboxes to batch-move."));
-            SetBusy(false);
+                Log("SCAN ERROR: " + ex.Message);
+                Status(Loc.T("扫描出错，详情见日志", "Scan error, see log"));
+            }
+            finally
+            {
+                _btnScan.IsEnabled = true;
+            }
         }
 
         void OnSelect()
@@ -385,15 +396,22 @@ namespace AppDataMover
             SetBusy(true);
             _bar.IsIndeterminate = true;
             int ok = 0, fail = 0, skip = 0; long moved = 0;
-            foreach (var r in candidates)
+            try
             {
-                var result = await MoveOneAsync(r, null);
-                if (result == 1) { ok++; moved += r.E.SizeBytes; }
-                else if (result == -1) fail++;
-                else skip++;
+                foreach (var r in candidates)
+                {
+                    var result = await MoveOneAsync(r, null);
+                    if (result == 1) { ok++; moved += r.E.SizeBytes; }
+                    else if (result == -1) fail++;
+                    else skip++;
+                }
             }
-            _bar.IsIndeterminate = false;
-            SetBusy(false);
+            catch (Exception ex) { Log("BATCH ERROR: " + ex.Message); }
+            finally
+            {
+                _bar.IsIndeterminate = false;
+                SetBusy(false);
+            }
             Status(Loc.T("一键迁移完成：成功 ", "One-click done: ok=") + ok + "（" + FolderEntry.Humanize(moved) + "）"
                 + Loc.T("，失败 ", ", failed=") + fail + Loc.T("，跳过 ", ", skipped=") + skip);
         }
@@ -406,13 +424,20 @@ namespace AppDataMover
             SetBusy(true);
             _bar.IsIndeterminate = true;
             int ok = 0, fail = 0, skip = 0;
-            foreach (var r in targets)
+            try
             {
-                var result = await MoveOneAsync(r, null);
-                if (result == 1) ok++; else if (result == -1) fail++; else skip++;
+                foreach (var r in targets)
+                {
+                    var result = await MoveOneAsync(r, null);
+                    if (result == 1) ok++; else if (result == -1) fail++; else skip++;
+                }
             }
-            _bar.IsIndeterminate = false;
-            SetBusy(false);
+            catch (Exception ex) { Log("BATCH ERROR: " + ex.Message); }
+            finally
+            {
+                _bar.IsIndeterminate = false;
+                SetBusy(false);
+            }
             Status(Loc.T("批量完成：成功 ", "Batch done: ok=") + ok + Loc.T("，失败 ", ", failed=") + fail + Loc.T("，跳过 ", ", skipped=") + skip);
         }
 
@@ -459,17 +484,24 @@ namespace AppDataMover
             SetBusy(true);
             _bar.IsIndeterminate = true;
             var log = new SynchronizationContextProgress<string>(Log);
-            foreach (var r in targets)
+            try
             {
-                Log(Loc.T("搬回 ", "Restoring ") + r.E.Name);
-                var rep = await Mover.RestoreAsync(r.E.FullPath, log, CancellationToken.None);
-                if (rep.Success) { r.E.State = MoveState.Normal; r.E.JunctionTarget = null; }
-                else r.E.State = MoveState.Failed;
-                Log(rep.Message);
-                r.Refresh();
+                foreach (var r in targets)
+                {
+                    Log(Loc.T("搬回 ", "Restoring ") + r.E.Name);
+                    var rep = await Mover.RestoreAsync(r.E.FullPath, log, CancellationToken.None);
+                    if (rep.Success) { r.E.State = MoveState.Normal; r.E.JunctionTarget = null; }
+                    else r.E.State = MoveState.Failed;
+                    Log(rep.Message);
+                    r.Refresh();
+                }
             }
-            _bar.IsIndeterminate = false;
-            SetBusy(false);
+            catch (Exception ex) { Log("RESTORE ERROR: " + ex.Message); }
+            finally
+            {
+                _bar.IsIndeterminate = false;
+                SetBusy(false);
+            }
         }
 
         void Status(string s) { _status.Text = s; }
