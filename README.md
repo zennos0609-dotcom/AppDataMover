@@ -139,3 +139,8 @@ This tool operates on real user data. Every step is verified and rollback-capabl
 ### License
 
 MIT
+
+---
+
+> 🤖 **AI 说明 / AI disclosure**：本项目代码由作者与 AI 助手（Kimi）结对开发，作者负责产品设计、真实环境测试与全部技术决策。
+> This project's code was pair-developed by the author with an AI assistant (Kimi). The author owns the product design, real-world testing, and all technical decisions.
